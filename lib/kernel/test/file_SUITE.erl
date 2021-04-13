@@ -3466,6 +3466,7 @@ read_ahead(Config) when is_list(Config) ->
     Data1 = "asdfghjkl", % Must be
     Data2 = "qwertyuio", % same
     Data3 = "zxcvbnm,.", % length
+    Data1Data2Data3 = Data1++Data2++Data3,
     Size = length(Data1),
     Size = length(Data2),
     Size = length(Data3),
@@ -3505,7 +3506,6 @@ read_ahead(Config) when is_list(Config) ->
     {ok, Data1} = ?FILE_MODULE:read(Fd5, Size),
     ok = ?FILE_MODULE:write(Fd5, Data2),
     {ok, 0} = ?FILE_MODULE:position(Fd5, bof),
-    Data1Data2Data3 = Data1++Data2++Data3,
     {ok, Data1Data2Data3} = ?FILE_MODULE:read(Fd5, 3*Size+1),
     ok = ?FILE_MODULE:close(Fd5),
 
@@ -3517,6 +3517,33 @@ read_ahead(Config) when is_list(Config) ->
     {ok, <<1>>} = file:read(Fd6, 1),
     <<1, Shifted:512/binary, _Rest/binary>> = SplitData,
     {ok, Shifted} = file:read(Fd6, 512),
+    ok = ?FILE_MODULE:close(Fd6),
+
+    %% Ensure that file position calls that do not wipe the buffer
+    %% behave as the user would expect
+    {ok, Fd7} = ?FILE_MODULE:open(File, [raw, read, write, read_ahead]),
+    ok = ?FILE_MODULE:truncate(Fd7),
+    ok = ?FILE_MODULE:write(Fd7, [Data1,Data2|Data3]),
+    {ok, 0} = ?FILE_MODULE:position(Fd7, bof),
+    {ok, Data1} = ?FILE_MODULE:read(Fd7, Size),
+    {ok, Size} = ?FILE_MODULE:position(Fd7, cur),
+    Size2 = Size*2,
+    {ok, Size2} = ?FILE_MODULE:position(Fd7, {cur, Size}),
+    {ok, Data3} = ?FILE_MODULE:read(Fd7, Size+1),
+    ok = ?FILE_MODULE:close(Fd7),
+
+    %% Ensure that a write does wipe out the buffer and writes in
+    %% the correct location
+    {ok, Fd8} = ?FILE_MODULE:open(File, [raw, read, write, read_ahead]),
+    ok = ?FILE_MODULE:truncate(Fd8),
+    ok = ?FILE_MODULE:write(Fd8, [Data1,Data2|Data3]),
+    {ok, 0} = ?FILE_MODULE:position(Fd8, bof),
+    {ok, Data1} = ?FILE_MODULE:read(Fd8, Size),
+    ok = ?FILE_MODULE:write(Fd8, Data2),
+    {ok, Data3} = ?FILE_MODULE:read(Fd8, Size+1),
+    {ok, 0} = ?FILE_MODULE:position(Fd8, bof),
+    {ok, Data1Data2Data3} = ?FILE_MODULE:read(Fd8, 3*Size+1),
+    ok = ?FILE_MODULE:close(Fd8),
 
     %%
     [] = flush(),

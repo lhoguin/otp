@@ -289,8 +289,15 @@ datasync(Fd) ->
 position(Fd, {cur, Offset}) ->
     try
         %% Adjust our current position according to how much we've read ahead.
+        %% When possible we avoid wiping out the read buffer.
         #{ r_buffer := RBuf } = get_fd_data(Fd),
-        position_1(Fd, cur, Offset - prim_buffer:size(RBuf))
+        Size = prim_buffer:size(RBuf),
+        if
+            Offset >= 0, Offset < Size ->
+                position_skip(Fd, Offset, Offset - Size);
+            true ->
+                position_1(Fd, cur, Offset - Size)
+        end
     catch
         error:badarg -> {error, badarg}
     end;
@@ -309,6 +316,24 @@ position_1(Fd, Mark, Offset) ->
     #{ handle := FRef, r_buffer := RBuf } = get_fd_data(Fd),
     prim_buffer:wipe(RBuf),
     seek_nif(FRef, Mark, Offset).
+
+%% We skip the read buffer by the requested offset,
+%% but do not move the fd position. We still need
+%% to call seek_nif/3 to get the current position
+%% but we transform the result to return the position
+%% the user thinks we are moving to.
+position_skip(Fd, SkipSize, Offset) ->
+    #{ handle := FRef, r_buffer := RBuf } = get_fd_data(Fd),
+    case SkipSize of
+        0 -> ok;
+        _ -> prim_buffer:skip(RBuf, SkipSize)
+    end,
+    case seek_nif(FRef, cur, 0) of
+        {ok, RealOffset} ->
+            {ok, RealOffset + Offset};
+        Error ->
+            Error
+    end.
 
 pread(Fd, Offset, Size) ->
     try
@@ -451,10 +476,15 @@ get_handle(Fd) ->
 %% Resets the write head to the position the user believes we're at, which may
 %% not be the same as the real one when read caching is in effect.
 reset_write_position(Fd) ->
-    #{ r_buffer := RBuf } = Fd#file_descriptor.data,
+    #{ handle := FRef, r_buffer := RBuf } = Fd#file_descriptor.data,
     case prim_buffer:size(RBuf) of
-        Size when Size > 0 -> position(Fd, cur);
-        Size when Size =:= 0 -> ok
+        Size when Size > 0 ->
+            %% We cannot call position/2 directly because we
+            %% unconditionally need to wipe the read buffer.
+            prim_buffer:wipe(RBuf),
+            seek_nif(FRef, cur, -Size);
+        Size when Size =:= 0 ->
+            ok
     end.
 
 get_fd_data(#file_descriptor{ data = Data }) ->
